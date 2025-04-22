@@ -88,8 +88,10 @@ public:
     }
 };
 
+string filename = "world_cities.csv";
+CityCache cache;
+
 int main() {
-    string filename = "world_cities.csv";
     while (true) {
         string city, code;
         cout << "Enter city name (or 'exit' to quit): ";
@@ -97,8 +99,18 @@ int main() {
         if (toLower(city) == "exit") break;
         cout << "Enter country code: ";
         getline(cin, code);
-        string population = searchCityInCSV(filename, code, city);
-        cout << "Population: " << population << endl;
+
+        string population;
+        if (cache.get(code, city, population)) {
+            cout << "Population (from cache): " << population << endl;
+        } else {
+            population = searchCityInCSV(filename, code, city);
+            if (population != "City not found.") {
+                cache.put(code, city, population);
+            }
+            cout << "Population: " << population << endl;
+        }
     }
     return 0;
 }
+
