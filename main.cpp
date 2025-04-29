@@ -1,3 +1,4 @@
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -5,6 +6,9 @@
 #include <unordered_map>
 #include <list>
 #include <algorithm>
+#include <vector>
+#include <cstdlib>
+#include <ctime>
 using namespace std;
 
 string toLower(const string& s) {
@@ -147,6 +151,49 @@ public:
     void printCache() const override {
         cout << "[FIFO Cache]:" << endl;
         for (const auto& key : order)
+            cout << key.cityName << " (" << key.countryCode << ") - Pop: " << cache.at(key) << endl;
+    }
+};
+
+class RandomCache : public ICacheStrategy {
+    unordered_map<CityKey, string, CityKeyHasher> cache;
+    vector<CityKey> keys;
+    const size_t capacity = 10;
+
+public:
+    RandomCache() {
+        srand(time(nullptr));
+    }
+
+    bool get(const string& cc, const string& name, string& pop) override {
+        CityKey key{cc, name};
+        auto it = cache.find(key);
+        if (it != cache.end()) {
+            pop = it->second;
+            return true;
+        }
+        return false;
+    }
+
+    void put(const string& cc, const string& name, const string& pop) override {
+        CityKey key{cc, name};
+
+        if (cache.find(key) != cache.end()) return;
+
+        if (cache.size() == capacity) {
+            int index = rand() % keys.size();
+            CityKey evictKey = keys[index];
+            cache.erase(evictKey);
+            keys.erase(keys.begin() + index);
+        }
+
+        cache[key] = pop;
+        keys.push_back(key);
+    }
+
+    void printCache() const override {
+        cout << "[Random Cache]:" << endl;
+        for (const auto& key : keys)
             cout << key.cityName << " (" << key.countryCode << ") - Pop: " << cache.at(key) << endl;
     }
 };
