@@ -199,8 +199,21 @@ public:
 };
 
 int main() {
-    ICacheStrategy* cache = new LFUCache();
+    ICacheStrategy* cache = nullptr;
     string filename = "world_cities.csv";
+
+    cout << "Choose caching strategy (lfu, fifo, random): ";
+    string choice;
+    getline(cin, choice);
+    choice = toLower(choice);
+
+    if (choice == "lfu") cache = new LFUCache();
+    else if (choice == "fifo") cache = new FIFOCache();
+    else if (choice == "random") cache = new RandomCache();
+    else {
+        cout << "Invalid strategy.\n";
+        return 1;
+    }
 
     while (true) {
         string city, country;
