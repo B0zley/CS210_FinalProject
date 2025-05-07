@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -49,6 +48,69 @@ string searchCityInCSV(const string& filename, const string& countryCode, const 
     }
     return "City not found.";
 }
+
+class Trie {
+    struct TrieNode {
+        unordered_map<string, string> cityData;  // Maps countryCode to population
+        unordered_map<char, TrieNode*> children; // Children nodes for each letter
+    };
+
+    TrieNode* root;
+
+public:
+    Trie() {
+        root = new TrieNode();
+    }
+
+    // Insert a city with its country code and population into the Trie
+    void insert(const string& countryCode, const string& cityName, const string& population) {
+        TrieNode* node = root;
+        string city = toLower(cityName);
+
+        for (char c : city) {
+            if (node->children.find(c) == node->children.end()) {
+                node->children[c] = new TrieNode();
+            }
+            node = node->children[c];
+        }
+
+        // Store the population for the specific country code
+        node->cityData[countryCode] = population;
+    }
+
+    // Search for a city and return its population based on the country code
+    bool search(const string& countryCode, const string& cityName, string& population) {
+        TrieNode* node = root;
+        string city = toLower(cityName);
+
+        for (char c : city) {
+            if (node->children.find(c) == node->children.end()) {
+                return false;
+            }
+            node = node->children[c];
+        }
+
+        // Check if the city exists for the given country code
+        if (node->cityData.find(countryCode) != node->cityData.end()) {
+            population = node->cityData[countryCode];
+            return true;
+        }
+        return false;
+    }
+
+    ~Trie() {
+        // Recursively delete all nodes
+        deleteTrie(root);
+    }
+
+private:
+    void deleteTrie(TrieNode* node) {
+        for (auto& child : node->children) {
+            deleteTrie(child.second);
+        }
+        delete node;
+    }
+};
 
 class ICacheStrategy {
 public:
@@ -199,9 +261,29 @@ public:
 };
 
 int main() {
-    ICacheStrategy* cache = nullptr;
+    Trie cityTrie;
     string filename = "world_cities.csv";
 
+    // Load data into Trie at startup
+    ifstream file(filename);
+    if (!file.is_open()) {
+        cout << "Error opening file.\n";
+        return 1;
+    }
+
+    string line;
+    getline(file, line); // Skip header line
+    while (getline(file, line)) {
+        stringstream ss(line);
+        string code, name, pop;
+        getline(ss, code, ',');
+        getline(ss, name, ',');
+        getline(ss, pop, ',');
+        cityTrie.insert(code, name, pop);
+    }
+    file.close();
+
+    ICacheStrategy* cache = nullptr;
     cout << "Choose caching strategy (lfu, fifo, random): ";
     string choice;
     getline(cin, choice);
@@ -227,11 +309,12 @@ int main() {
         if (cache->get(country, city, population)) {
             cout << "Population (from cache): " << population << endl;
         } else {
-            population = searchCityInCSV(filename, country, city);
-            if (population != "City not found.") {
+            if (cityTrie.search(country, city, population)) {
                 cache->put(country, city, population);
+                cout << "Population (from Trie): " << population << endl;
+            } else {
+                cout << "City not found.\n";
             }
-            cout << "Population: " << population << endl;
         }
 
         cache->printCache();
