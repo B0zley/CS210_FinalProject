@@ -1,13 +1,11 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <list>
-#include <algorithm>
 #include <vector>
-#include <cstdlib>
-#include <ctime>
+#include <algorithm>
 using namespace std;
 
 string toLower(const string& s) {
@@ -16,6 +14,7 @@ string toLower(const string& s) {
     return res;
 }
 
+// ----- CityKey and Hasher -----
 struct CityKey {
     string countryCode;
     string cityName;
@@ -31,28 +30,11 @@ struct CityKeyHasher {
     }
 };
 
-string searchCityInCSV(const string& filename, const string& countryCode, const string& cityName) {
-    ifstream file(filename);
-    if (!file.is_open()) return "";
-
-    string line;
-    getline(file, line);
-    while (getline(file, line)) {
-        stringstream ss(line);
-        string code, name, pop;
-        getline(ss, code, ',');
-        getline(ss, name, ',');
-        getline(ss, pop, ',');
-        if (toLower(code) == toLower(countryCode) && toLower(name) == toLower(cityName))
-            return pop;
-    }
-    return "City not found.";
-}
-
+// ----- Trie Implementation -----
 class Trie {
     struct TrieNode {
-        unordered_map<string, string> cityData;  // Maps countryCode to population
-        unordered_map<char, TrieNode*> children; // Children nodes for each letter
+        unordered_map<string, string> cityData; // countryCode -> population
+        unordered_map<char, TrieNode*> children;
     };
 
     TrieNode* root;
@@ -62,36 +44,24 @@ public:
         root = new TrieNode();
     }
 
-    // Insert a city with its country code and population into the Trie
     void insert(const string& countryCode, const string& cityName, const string& population) {
         TrieNode* node = root;
         string city = toLower(cityName);
-
         for (char c : city) {
-            if (node->children.find(c) == node->children.end()) {
-                node->children[c] = new TrieNode();
-            }
+            if (!node->children[c]) node->children[c] = new TrieNode();
             node = node->children[c];
         }
-
-        // Store the population for the specific country code
         node->cityData[countryCode] = population;
     }
 
-    // Search for a city and return its population based on the country code
     bool search(const string& countryCode, const string& cityName, string& population) {
         TrieNode* node = root;
         string city = toLower(cityName);
-
         for (char c : city) {
-            if (node->children.find(c) == node->children.end()) {
-                return false;
-            }
+            if (!node->children.count(c)) return false;
             node = node->children[c];
         }
-
-        // Check if the city exists for the given country code
-        if (node->cityData.find(countryCode) != node->cityData.end()) {
+        if (node->cityData.count(countryCode)) {
             population = node->cityData[countryCode];
             return true;
         }
@@ -99,222 +69,145 @@ public:
     }
 
     ~Trie() {
-        // Recursively delete all nodes
-        deleteTrie(root);
+        clear(root);
     }
 
 private:
-    void deleteTrie(TrieNode* node) {
-        for (auto& child : node->children) {
-            deleteTrie(child.second);
-        }
+    void clear(TrieNode* node) {
+        for (auto& [c, child] : node->children)
+            clear(child);
         delete node;
     }
 };
 
+// ----- Cache Interface -----
 class ICacheStrategy {
 public:
-    virtual bool get(const string& country, const string& city, string& population) = 0;
-    virtual void put(const string& country, const string& city, const string& population) = 0;
+    virtual bool get(const string& cc, const string& city, string& pop) = 0;
+    virtual void put(const string& cc, const string& city, const string& pop) = 0;
     virtual void printCache() const = 0;
     virtual ~ICacheStrategy() = default;
 };
 
+// ----- LFU Cache Implementation -----
 class LFUCache : public ICacheStrategy {
-    struct CacheEntry {
-        string population;
+    struct Entry {
+        string pop;
         int freq;
-        list<CityKey>::iterator iter;
+        list<CityKey>::iterator it;
     };
 
-    unordered_map<CityKey, CacheEntry, CityKeyHasher> cache;
-    unordered_map<int, list<CityKey>> freqList;
-    const size_t capacity = 10;
+    unordered_map<CityKey, Entry, CityKeyHasher> cache;
+    unordered_map<int, list<CityKey>> freqMap;
     int minFreq = 0;
+    const size_t CAPACITY = 10;
 
 public:
-    bool get(const string& cc, const string& name, string& pop) override {
-        CityKey key{cc, name};
+    bool get(const string& cc, const string& city, string& pop) override {
+        CityKey key{cc, city};
         auto it = cache.find(key);
         if (it == cache.end()) return false;
 
-        int freq = it->second.freq;
-        freqList[freq].erase(it->second.iter);
-        if (freqList[freq].empty()) {
-            freqList.erase(freq);
-            if (freq == minFreq) minFreq++;
+        int f = it->second.freq;
+        freqMap[f].erase(it->second.it);
+        if (freqMap[f].empty()) {
+            freqMap.erase(f);
+            if (minFreq == f) minFreq++;
         }
 
-        freqList[freq + 1].push_front(key);
+        freqMap[f + 1].push_front(key);
         it->second.freq++;
-        it->second.iter = freqList[freq + 1].begin();
-        pop = it->second.population;
+        it->second.it = freqMap[f + 1].begin();
+        pop = it->second.pop;
         return true;
     }
 
-    void put(const string& cc, const string& name, const string& pop) override {
-        CityKey key{cc, name};
-
+    void put(const string& cc, const string& city, const string& pop) override {
+        CityKey key{cc, city};
         string dummy;
-        if (get(cc, name, dummy)) {
-            cache[key].population = pop;
+        if (get(cc, city, dummy)) {
+            cache[key].pop = pop;
             return;
         }
 
-        if (cache.size() == capacity) {
-            CityKey evictKey = freqList[minFreq].back();
-            freqList[minFreq].pop_back();
-            if (freqList[minFreq].empty()) freqList.erase(minFreq);
-            cache.erase(evictKey);
+        if (cache.size() >= CAPACITY) {
+            CityKey evict = freqMap[minFreq].back();
+            freqMap[minFreq].pop_back();
+            cache.erase(evict);
+            if (freqMap[minFreq].empty()) freqMap.erase(minFreq);
         }
 
         minFreq = 1;
-        freqList[1].push_front(key);
-        cache[key] = {pop, 1, freqList[1].begin()};
+        freqMap[1].push_front(key);
+        cache[key] = {pop, 1, freqMap[1].begin()};
     }
 
     void printCache() const override {
-        cout << "[LFU Cache]:" << endl;
-        for (const auto& [key, entry] : cache)
-            cout << key.cityName << " (" << key.countryCode << ") - Pop: " << entry.population << ", Freq: " << entry.freq << endl;
+        cout << "\n[LFU Cache State]:\n";
+        for (const auto& [key, val] : cache) {
+            cout << key.cityName << " (" << key.countryCode << ") - Pop: "
+                 << val.pop << ", Freq: " << val.freq << "\n";
+        }
     }
 };
 
-class FIFOCache : public ICacheStrategy {
-    unordered_map<CityKey, string, CityKeyHasher> cache;
-    list<CityKey> order;
-    const size_t capacity = 10;
-
-public:
-    bool get(const string& cc, const string& name, string& pop) override {
-        CityKey key{cc, name};
-        auto it = cache.find(key);
-        if (it != cache.end()) {
-            pop = it->second;
-            return true;
-        }
-        return false;
-    }
-
-    void put(const string& cc, const string& name, const string& pop) override {
-        CityKey key{cc, name};
-        if (cache.find(key) != cache.end()) return;
-
-        if (cache.size() == capacity) {
-            CityKey old = order.front();
-            order.pop_front();
-            cache.erase(old);
-        }
-
-        cache[key] = pop;
-        order.push_back(key);
-    }
-
-    void printCache() const override {
-        cout << "[FIFO Cache]:" << endl;
-        for (const auto& key : order)
-            cout << key.cityName << " (" << key.countryCode << ") - Pop: " << cache.at(key) << endl;
-    }
-};
-
-class RandomCache : public ICacheStrategy {
-    unordered_map<CityKey, string, CityKeyHasher> cache;
-    vector<CityKey> keys;
-    const size_t capacity = 10;
-
-public:
-    RandomCache() {
-        srand(time(nullptr));
-    }
-
-    bool get(const string& cc, const string& name, string& pop) override {
-        CityKey key{cc, name};
-        auto it = cache.find(key);
-        if (it != cache.end()) {
-            pop = it->second;
-            return true;
-        }
-        return false;
-    }
-
-    void put(const string& cc, const string& name, const string& pop) override {
-        CityKey key{cc, name};
-
-        if (cache.find(key) != cache.end()) return;
-
-        if (cache.size() == capacity) {
-            int index = rand() % keys.size();
-            CityKey evictKey = keys[index];
-            cache.erase(evictKey);
-            keys.erase(keys.begin() + index);
-        }
-
-        cache[key] = pop;
-        keys.push_back(key);
-    }
-
-    void printCache() const override {
-        cout << "[Random Cache]:" << endl;
-        for (const auto& key : keys)
-            cout << key.cityName << " (" << key.countryCode << ") - Pop: " << cache.at(key) << endl;
-    }
-};
-
-int main() {
-    Trie cityTrie;
-    string filename = "world_cities.csv";
-
-    // Load data into Trie at startup
+// ----- Load CSV into Trie -----
+void loadCitiesIntoTrie(Trie& trie, const string& filename) {
     ifstream file(filename);
     if (!file.is_open()) {
-        cout << "Error opening file.\n";
-        return 1;
+        cerr << "Error: Cannot open " << filename << "\n";
+        return;
     }
 
     string line;
-    getline(file, line); // Skip header line
+    getline(file, line); // skip header
     while (getline(file, line)) {
         stringstream ss(line);
         string code, name, pop;
         getline(ss, code, ',');
         getline(ss, name, ',');
         getline(ss, pop, ',');
-        cityTrie.insert(code, name, pop);
+        trie.insert(code, name, pop);
     }
+
+    cout << "Loaded city data into Trie.\n";
     file.close();
+}
+
+// ----- Main Program -----
+int main() {
+    Trie cityTrie;
+    loadCitiesIntoTrie(cityTrie, "world_cities.csv");
 
     ICacheStrategy* cache = nullptr;
-    cout << "Choose caching strategy (lfu, fifo, random): ";
-    string choice;
-    getline(cin, choice);
-    choice = toLower(choice);
 
-    if (choice == "lfu") cache = new LFUCache();
-    else if (choice == "fifo") cache = new FIFOCache();
-    else if (choice == "random") cache = new RandomCache();
+    cout << "Select cache strategy (lfu): ";
+    string strategy;
+    getline(cin, strategy);
+    strategy = toLower(strategy);
+
+    if (strategy == "lfu") cache = new LFUCache();
     else {
-        cout << "Invalid strategy.\n";
+        cout << "Unsupported strategy.\n";
         return 1;
     }
 
     while (true) {
         string city, country;
-        cout << "Enter city (or 'exit'): ";
+        cout << "\nEnter city (or 'exit'): ";
         getline(cin, city);
         if (toLower(city) == "exit") break;
         cout << "Enter country code: ";
         getline(cin, country);
 
-        string population;
-        if (cache->get(country, city, population)) {
-            cout << "Population (from cache): " << population << endl;
+        string pop;
+        if (cache->get(country, city, pop)) {
+            cout << "Population (cache): " << pop << endl;
+        } else if (cityTrie.search(country, city, pop)) {
+            cache->put(country, city, pop);
+            cout << "Population (trie): " << pop << endl;
         } else {
-            if (cityTrie.search(country, city, population)) {
-                cache->put(country, city, population);
-                cout << "Population (from Trie): " << population << endl;
-            } else {
-                cout << "City not found.\n";
-            }
+            cout << "City not found.\n";
         }
 
         cache->printCache();
