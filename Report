@@ -1,0 +1,81 @@
+Here's a polished and professional report based on your content:
+
+---
+
+# **Performance Analysis of Caching Strategies for City Population Lookup**
+
+## **1. Testing Methodology**
+
+To evaluate the effectiveness of different caching strategies in a city population lookup system, we tested the following three approaches:
+
+* **Dataset**: 1,000 randomized city/country queries with a 30% repeat rate to simulate realistic usage patterns.
+* **Cache Configuration**: Fixed size of 10 entries.
+* **Hardware**: Intel Core i7-10750H processor with 16 GB RAM.
+* **Metrics Collected**:
+
+  * *Average Lookup Time* (in microseconds)
+  * *Cache Hit Rate* (percentage of queries served from cache)
+
+## **2. Results Summary**
+
+| Caching Strategy | Avg Lookup Time (μs) | Cache Hit Rate |
+| ---------------- | -------------------- | -------------- |
+| LFU              | 45.2                 | 68%            |
+| FIFO             | 39.8                 | 62%            |
+| Random           | 41.5                 | 59%            |
+
+## **3. Observations**
+
+### **LFU (Least Frequently Used)**
+
+* **Pros**:
+
+  * Achieved the highest cache hit rate at 68%, showing its effectiveness in retaining frequently accessed data.
+  * Particularly well-suited for scenarios where certain cities are queried repeatedly.
+* **Cons**:
+
+  * Slightly higher lookup time due to the overhead of tracking access frequencies.
+  * Requires more complex internal data structures.
+
+### **FIFO (First-In-First-Out)**
+
+* **Pros**:
+
+  * Delivered the fastest lookup time (39.8μs), thanks to its simple queue-based implementation.
+  * Maintained consistent performance across varied query patterns.
+* **Cons**:
+
+  * Lower hit rate compared to LFU, especially when access frequency is skewed.
+
+### **Random Replacement**
+
+* **Pros**:
+
+  * Simplest implementation—requires minimal logic to evict entries.
+  * Moderate performance in both time and hit rate.
+* **Cons**:
+
+  * Less predictable results, with performance varying between runs.
+  * Tends to underperform when certain entries are frequently re-accessed.
+
+## **4. Conclusion and Recommendations**
+
+Based on the results:
+
+* **LFU is recommended** when:
+
+  * The application experiences repeated queries to specific cities.
+  * Cache hit rate and memory efficiency are top priorities.
+
+* **FIFO is a strong alternative** when:
+
+  * Simplicity and consistent response times are preferred.
+  * The query distribution is more uniform or less predictable.
+
+While **Random Replacement** offers an easy-to-implement fallback, it generally falls behind LFU and FIFO in efficiency and consistency.
+
+**Overall**, for a general-purpose city population lookup system expected to handle both frequent and infrequent queries, **LFU offers the best balance between performance and cache efficiency**.
+
+---
+
+Let me know if you'd like this report in PDF or Markdown format, or want to include charts/graphs.
