@@ -1,218 +1,107 @@
 #include <iostream>
 #include <fstream>
-#include <sstream>
-#include <unordered_map>
-#include <unordered_set>
-#include <list>
 #include <vector>
+#include <random>
+#include <chrono>
 #include <algorithm>
+#include "city_lookup.h"
+
 using namespace std;
+using namespace std::chrono;
 
-string toLower(const string& s) {
-    string res = s;
-    transform(res.begin(), res.end(), res.begin(), ::tolower);
-    return res;
-}
-
-// ----- CityKey and Hasher -----
-struct CityKey {
-    string countryCode;
-    string cityName;
-
-    bool operator==(const CityKey& other) const {
-        return countryCode == other.countryCode && cityName == other.cityName;
-    }
-};
-
-struct CityKeyHasher {
-    size_t operator()(const CityKey& key) const {
-        return hash<string>()(key.countryCode + "|" + key.cityName);
-    }
-};
-
-// ----- Trie Implementation -----
-class Trie {
-    struct TrieNode {
-        unordered_map<string, string> cityData; // countryCode -> population
-        unordered_map<char, TrieNode*> children;
-    };
-
-    TrieNode* root;
-
-public:
-    Trie() {
-        root = new TrieNode();
-    }
-
-    void insert(const string& countryCode, const string& cityName, const string& population) {
-        TrieNode* node = root;
-        string city = toLower(cityName);
-        for (char c : city) {
-            if (!node->children[c]) node->children[c] = new TrieNode();
-            node = node->children[c];
-        }
-        node->cityData[countryCode] = population;
-    }
-
-    bool search(const string& countryCode, const string& cityName, string& population) {
-        TrieNode* node = root;
-        string city = toLower(cityName);
-        for (char c : city) {
-            if (!node->children.count(c)) return false;
-            node = node->children[c];
-        }
-        if (node->cityData.count(countryCode)) {
-            population = node->cityData[countryCode];
-            return true;
-        }
-        return false;
-    }
-
-    ~Trie() {
-        clear(root);
-    }
-
-private:
-    void clear(TrieNode* node) {
-        for (auto& [c, child] : node->children)
-            clear(child);
-        delete node;
-    }
-};
-
-// ----- Cache Interface -----
-class ICacheStrategy {
-public:
-    virtual bool get(const string& cc, const string& city, string& pop) = 0;
-    virtual void put(const string& cc, const string& city, const string& pop) = 0;
-    virtual void printCache() const = 0;
-    virtual ~ICacheStrategy() = default;
-};
-
-// ----- LFU Cache Implementation -----
-class LFUCache : public ICacheStrategy {
-    struct Entry {
-        string pop;
-        int freq;
-        list<CityKey>::iterator it;
-    };
-
-    unordered_map<CityKey, Entry, CityKeyHasher> cache;
-    unordered_map<int, list<CityKey>> freqMap;
-    int minFreq = 0;
-    const size_t CAPACITY = 10;
-
-public:
-    bool get(const string& cc, const string& city, string& pop) override {
-        CityKey key{cc, city};
-        auto it = cache.find(key);
-        if (it == cache.end()) return false;
-
-        int f = it->second.freq;
-        freqMap[f].erase(it->second.it);
-        if (freqMap[f].empty()) {
-            freqMap.erase(f);
-            if (minFreq == f) minFreq++;
-        }
-
-        freqMap[f + 1].push_front(key);
-        it->second.freq++;
-        it->second.it = freqMap[f + 1].begin();
-        pop = it->second.pop;
-        return true;
-    }
-
-    void put(const string& cc, const string& city, const string& pop) override {
-        CityKey key{cc, city};
-        string dummy;
-        if (get(cc, city, dummy)) {
-            cache[key].pop = pop;
-            return;
-        }
-
-        if (cache.size() >= CAPACITY) {
-            CityKey evict = freqMap[minFreq].back();
-            freqMap[minFreq].pop_back();
-            cache.erase(evict);
-            if (freqMap[minFreq].empty()) freqMap.erase(minFreq);
-        }
-
-        minFreq = 1;
-        freqMap[1].push_front(key);
-        cache[key] = {pop, 1, freqMap[1].begin()};
-    }
-
-    void printCache() const override {
-        cout << "\n[LFU Cache State]:\n";
-        for (const auto& [key, val] : cache) {
-            cout << key.cityName << " (" << key.countryCode << ") - Pop: "
-                 << val.pop << ", Freq: " << val.freq << "\n";
-        }
-    }
-};
-
-// ----- Load CSV into Trie -----
-void loadCitiesIntoTrie(Trie& trie, const string& filename) {
-    ifstream file(filename);
-    if (!file.is_open()) {
-        cerr << "Error: Cannot open " << filename << "\n";
-        return;
-    }
-
-    string line;
-    getline(file, line); // skip header
-    while (getline(file, line)) {
-        stringstream ss(line);
-        string code, name, pop;
-        getline(ss, code, ',');
-        getline(ss, name, ',');
-        getline(ss, pop, ',');
-        trie.insert(code, name, pop);
-    }
-
-    cout << "Loaded city data into Trie.\n";
-    file.close();
-}
-
-// ----- Main Program -----
-int main() {
-    Trie cityTrie;
-    loadCitiesIntoTrie(cityTrie, "world_cities.csv");
-
-    ICacheStrategy* cache = nullptr;
-
-    cout << "Select cache strategy (lfu): ";
+struct TestResult {
+    double avg_time;
+    double hit_rate;
     string strategy;
-    getline(cin, strategy);
-    strategy = toLower(strategy);
+};
 
-    if (strategy == "lfu") cache = new LFUCache();
-    else {
-        cout << "Unsupported strategy.\n";
-        return 1;
-    }
+TestResult run_test(const vector<pair<string, string>>& queries,
+                   ICacheStrategy* cache, CityLookup& lookup) {
+    int hits = 0;
+    double total_time = 0;
 
-    while (true) {
-        string city, country;
-        cout << "\nEnter city (or 'exit'): ";
-        getline(cin, city);
-        if (toLower(city) == "exit") break;
-        cout << "Enter country code: ";
-        getline(cin, country);
-
+    for (const auto& [city, country] : queries) {
         string pop;
-        if (cache->get(country, city, pop)) {
-            cout << "Population (cache): " << pop << endl;
-        } else if (cityTrie.search(country, city, pop)) {
-            cache->put(country, city, pop);
-            cout << "Population (trie): " << pop << endl;
-        } else {
-            cout << "City not found.\n";
-        }
 
-        cache->printCache();
+        auto start = high_resolution_clock::now();
+        bool hit = lookup.search(country, city, pop, cache);
+        auto end = high_resolution_clock::now();
+
+        total_time += duration_cast<microseconds>(end - start).count();
+        hits += hit ? 1 : 0;
     }
 
-    delete cache;
+    return {
+        total_time / queries.size(),  // avg_time (microseconds)
+        static_cast<double>(hits) / queries.size(),  // hit_rate
+        cache->strategyName()  // strategy name
+    };
+}
+
+vector<pair<string, string>> generate_queries(const vector<pair<string, string>>& cities,
+                                           int count, float repeat_prob) {
+    vector<pair<string, string>> queries;
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_real_distribution<> dis(0, 1);
+
+    for (int i = 0; i < count; ++i) {
+        if (dis(gen) < repeat_prob && !queries.empty()) {
+            // Repeat a previous query to test cache
+            uniform_int_distribution<> prev(0, queries.size()-1);
+            queries.push_back(queries[prev(gen)]);
+        } else {
+            // Select a random city
+            uniform_int_distribution<> dist(0, cities.size()-1);
+            queries.push_back(cities[dist(gen)]);
+        }
+    }
+
+    return queries;
+}
+
+void write_results(const vector<TestResult>& results, const string& filename) {
+    ofstream out(filename);
+    out << "Strategy,AvgTime(μs),HitRate\n";
+    for (const auto& res : results) {
+        out << res.strategy << "," << res.avg_time << "," << res.hit_rate << "\n";
+    }
+}
+
+int main() {
+    // Load city data
+    CityLookup lookup;
+    lookup.loadData("world_cities.csv");
+
+    // Get all cities for query generation
+    auto all_cities = lookup.getAllCities();
+
+    // Generate test queries (1000 with 30% repeat probability)
+    auto queries = generate_queries(all_cities, 1000, 0.3);
+
+    vector<TestResult> results;
+
+    // Test each strategy
+    vector<unique_ptr<ICacheStrategy>> strategies;
+    strategies.emplace_back(new LFUCache());
+    strategies.emplace_back(new FIFOCache());
+    strategies.emplace_back(new RandomCache());
+
+    for (auto& strategy : strategies) {
+        // Reset lookup system
+        lookup.resetCache();
+
+        // Run test
+        auto res = run_test(queries, strategy.get(), lookup);
+        results.push_back(res);
+
+        cout << "Tested " << res.strategy
+             << " - Avg: " << res.avg_time << "μs"
+             << ", Hit Rate: " << res.hit_rate * 100 << "%\n";
+    }
+
+    // Save results
+    write_results(results, "performance_results.csv");
+
     return 0;
 }
